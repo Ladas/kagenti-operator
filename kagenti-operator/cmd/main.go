@@ -111,34 +111,29 @@ func main() {
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
-	// Create watchers for metrics and webhooks certificates
-	var metricsCertWatcher, webhookCertWatcher *certwatcher.CertWatcher
+	// Create watcher for metrics certificates
+	// Note: webhook cert watcher is created automatically by controller-runtime when CertDir is set
+	var metricsCertWatcher *certwatcher.CertWatcher
 
-	// Initial webhook TLS options
-	webhookTLSOpts := tlsOpts
-
-	if len(webhookCertPath) > 0 {
-		setupLog.Info("Initializing webhook certificate watcher using provided certificates",
-			"webhook-cert-path", webhookCertPath, "webhook-cert-name", webhookCertName, "webhook-cert-key", webhookCertKey)
-
-		var err error
-		webhookCertWatcher, err = certwatcher.New(
-			filepath.Join(webhookCertPath, webhookCertName),
-			filepath.Join(webhookCertPath, webhookCertKey),
-		)
-		if err != nil {
-			setupLog.Error(err, "Failed to initialize webhook certificate watcher")
-			os.Exit(1)
-		}
-
-		webhookTLSOpts = append(webhookTLSOpts, func(config *tls.Config) {
-			config.GetCertificate = webhookCertWatcher.GetCertificate
-		})
+	// Configure webhook server with explicit certificate paths
+	// NOTE: We use CertDir/CertName/KeyName instead of GetCertificate in TLSOpts
+	// because controller-runtime ignores CertDir/CertName/KeyName when GetCertificate is set.
+	// controller-runtime will automatically create a certwatcher when CertDir is set.
+	webhookServerOptions := webhook.Options{
+		TLSOpts: tlsOpts,  // Only HTTP/2 disable option, no GetCertificate
 	}
 
-	webhookServer := webhook.NewServer(webhook.Options{
-		TLSOpts: webhookTLSOpts,
-	})
+	// If webhook certificates are provided, configure the server to use them
+	// controller-runtime will automatically watch for cert changes and reload
+	if len(webhookCertPath) > 0 {
+		setupLog.Info("Configuring webhook server with provided certificate paths",
+			"webhook-cert-path", webhookCertPath, "webhook-cert-name", webhookCertName, "webhook-cert-key", webhookCertKey)
+		webhookServerOptions.CertDir = webhookCertPath
+		webhookServerOptions.CertName = webhookCertName
+		webhookServerOptions.KeyName = webhookCertKey
+	}
+
+	webhookServer := webhook.NewServer(webhookServerOptions)
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
@@ -270,13 +265,8 @@ func main() {
 		}
 	}
 
-	if webhookCertWatcher != nil {
-		setupLog.Info("Adding webhook certificate watcher to manager")
-		if err := mgr.Add(webhookCertWatcher); err != nil {
-			setupLog.Error(err, "unable to add webhook certificate watcher to manager")
-			os.Exit(1)
-		}
-	}
+	// NOTE: webhook cert watcher is not added here because controller-runtime
+	// automatically creates and manages it when CertDir is set in webhook.Options
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")

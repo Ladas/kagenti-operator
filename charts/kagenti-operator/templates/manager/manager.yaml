@@ -86,11 +86,11 @@ spec:
         {{- if and .Values.webhook.enable .Values.certmanager.enable }}
         - name: webhook-cert
           secret:
-            secretName: kagenti-operator-webhook-server-cert
+            secretName: webhook-server-cert
         {{- end }}
         {{- if and .Values.metrics.enable .Values.certmanager.enable }}
         - name: metrics-certs
           secret:
-            secretName: kagenti-operator-metrics-server-cert
+            secretName: metrics-server-cert
         {{- end }}
       {{- end }}
