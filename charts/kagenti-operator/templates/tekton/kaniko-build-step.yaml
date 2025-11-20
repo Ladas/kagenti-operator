@@ -2,16 +2,15 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: kaniko-docker-build-step
-  namespace: {{ .Release.Namespace  }}
+  namespace: kagenti-system
   labels:
     kagenti.operator.dev/tekton: step 
 data:
-
   task-spec.yaml: |
     params:
       - name: DOCKERFILE
         type: string
-        description: Path to the Dockerfile relative to context
+        description: Name of Dockerfile (Dockerfile or Containerfile)
         default: "Dockerfile"
       - name: image
         type: string
@@ -23,15 +22,24 @@ data:
       - name: subfolder-path
         type: string
         description: Path to the subfolder to use as build context
+        default: "."
       - name: registry-secret
         type: string
         description: Name of the secret containing registry credentials
         default: "ghcr-token"
+    
+    workspaces:
+      - name: source
+    
+    results:
+      - name: IMAGE_URL
+        description: URL of the built image
+    
     steps:
       - name: docker-build
         image: quay.io/strimzi/kaniko-executor:0.48.0
         args:
-          - --dockerfile=$(params.DOCKERFILE)
+          - --dockerfile=$(workspaces.source.path)/$(params.subfolder-path)/$(params.DOCKERFILE)
           - --context=$(workspaces.source.path)/$(params.subfolder-path)
           - --destination=$(params.image)
           - --skip-tls-verify=$(params.SKIP_TLS_VERIFY)
@@ -43,6 +51,7 @@ data:
           - name: docker-config
             mountPath: /kaniko/.docker
             readOnly: true
+    
     volumes:
       - name: docker-config
         secret:
@@ -50,5 +59,3 @@ data:
           items:
           - key: .dockerconfigjson
             path: config.json
-    workspaces:
-      - name: source

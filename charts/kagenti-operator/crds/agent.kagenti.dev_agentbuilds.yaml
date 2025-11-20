@@ -118,6 +118,7 @@ spec:
                   This will be used to fetch the pipeline template from ConfigMap
                 enum:
                 - dev
+                - buildpack-dev
                 - dev-local
                 - dev-external
                 - preprod
@@ -203,6 +204,37 @@ spec:
                             users must provide
                           items:
                             type: string
+                          type: array
+                        whenExpressions:
+                          description: WhenExpressions defines conditions for step
+                            execution
+                          items:
+                            description: |-
+                              WhenExpression represents a conditional execution rule which will
+                              determine which build step to run (either kaniko-build or buildpack-build)
+                              based on the presence of a Dockerfile in the source code repository.
+                            properties:
+                              input:
+                                description: Input is the value to evaluate (can reference
+                                  task results)
+                                type: string
+                              operator:
+                                description: Operator is the comparison operator (in,
+                                  notin)
+                                enum:
+                                - in
+                                - notin
+                                type: string
+                              values:
+                                description: Values to compare against
+                                items:
+                                  type: string
+                                type: array
+                            required:
+                            - input
+                            - operator
+                            - values
+                            type: object
                           type: array
                       required:
                       - configMap

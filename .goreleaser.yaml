@@ -15,8 +15,27 @@ builds:
     goarch: ppc64le
   env:
   - CGO_ENABLED=0
+
+# ADD: kagenti-operator build configuration
+- id: "kagenti-operator"
+  dir: kagenti-operator
+  main: ./cmd
+  binary: ./bin/kagenti-operator-manager
+  goos:
+  - linux
+  - darwin
+  goarch:
+  - amd64
+  - arm64
+  ignore:
+  - goos: darwin
+    goarch: ppc64le
+  env:
+  - CGO_ENABLED=0
+
 archives:
-- ids: [platform-operator]
+- ids: [platform-operator, kagenti-operator]
+
 kos:
   - id: "platform-operator-ko"
     repositories:
@@ -24,6 +43,24 @@ kos:
     working_dir: platform-operator
     main: ./cmd
     build: platform-operator
+    tags:
+      - '{{.Version}}'
+      - latest
+    bare: true
+    preserve_import_paths: false
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    env:
+      - CGO_ENABLED=0
+
+  # ADD: kagenti-operator container image build
+  - id: "kagenti-operator-ko"
+    repositories:
+    - ghcr.io/kagenti/kagenti-operator/kagenti-operator
+    working_dir: kagenti-operator
+    main: ./cmd
+    build: kagenti-operator
     tags:
       - '{{.Version}}'
       - latest

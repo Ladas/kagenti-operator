@@ -15,10 +15,6 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: Container Image
-      jsonPath: .spec.image
-      name: Image
-      type: string
     - description: Number of Replicas
       jsonPath: .spec.replicas
       name: Replicas

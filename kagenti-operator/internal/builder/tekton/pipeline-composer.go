@@ -19,12 +19,14 @@ package tekton
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/go-logr/logr"
 	agentv1alpha1 "github.com/kagenti/operator/api/v1alpha1"
 	tektonv1 "github.com/tektoncd/pipeline/pkg/apis/pipeline/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
@@ -42,6 +44,9 @@ type StepDefinition struct {
 
 	// Parameters contains step-specific parameters
 	Parameters []agentv1alpha1.ParameterSpec
+
+	// WhenExpressions contains conditional execution rules
+	WhenExpressions []agentv1alpha1.WhenExpression
 }
 
 // PipelineComposer handles composition of pipelines from individual steps
@@ -57,7 +62,7 @@ func NewPipelineComposer(c client.Client, log logr.Logger) *PipelineComposer {
 	}
 }
 
-// ComposePipelineSpec builds a Tekton PipelineSpec object from individual step ConfigMaps
+// builds a Tekton PipelineSpec object from individual step ConfigMaps
 func (pc *PipelineComposer) ComposePipelineSpec(ctx context.Context, agentBuild *agentv1alpha1.AgentBuild) (*tektonv1.PipelineSpec, error) {
 
 	// Collect parameters auto-generated from spec
@@ -114,6 +119,7 @@ func (pc *PipelineComposer) mergeParameters(specParams, userParams []agentv1alph
 
 	return merged
 }
+
 func (pc *PipelineComposer) loadStepsWithMergedParams(ctx context.Context, agentBuild *agentv1alpha1.AgentBuild, globalParams []agentv1alpha1.ParameterSpec) (map[string]*StepDefinition, []string, error) {
 	steps := make(map[string]*StepDefinition)
 	var order []string
@@ -121,6 +127,21 @@ func (pc *PipelineComposer) loadStepsWithMergedParams(ctx context.Context, agent
 	for _, stepSpec := range agentBuild.Spec.Pipeline.Steps {
 		if stepSpec.Enabled != nil && !*stepSpec.Enabled {
 			continue
+		}
+
+		pc.Logger.Info("Loading step from template",
+			"stepName", stepSpec.Name,
+			"configMap", stepSpec.ConfigMap,
+			"whenExpressionsCount", len(stepSpec.WhenExpressions))
+
+		// Log each when expression
+		for j, when := range stepSpec.WhenExpressions {
+			pc.Logger.Info("WhenExpression details",
+				"stepName", stepSpec.Name,
+				"index", j,
+				"input", when.Input,
+				"operator", when.Operator,
+				"values", when.Values)
 		}
 		order = append(order, stepSpec.Name)
 
@@ -147,12 +168,15 @@ func (pc *PipelineComposer) loadStepsWithMergedParams(ctx context.Context, agent
 			return nil, nil, fmt.Errorf("failed to parse task spec definition: %w", err)
 		}
 
-		//Use merged global parameters instead of just Pipeline.Parameters
+		// Merge step-specific parameters with global parameters
+		stepParams := pc.mergeStepParameters(stepSpec.Parameters, globalParams)
+
 		step := &StepDefinition{
-			Name:       stepSpec.Name,
-			ConfigMap:  stepSpec.ConfigMap,
-			TaskSpec:   taskSpec,
-			Parameters: pc.mergeTaskParameters(taskSpec.Params, globalParams),
+			Name:            stepSpec.Name,
+			ConfigMap:       stepSpec.ConfigMap,
+			TaskSpec:        taskSpec,
+			Parameters:      pc.mergeTaskParameters(taskSpec.Params, stepParams),
+			WhenExpressions: stepSpec.WhenExpressions,
 		}
 
 		steps[stepSpec.Name] = step
@@ -161,11 +185,39 @@ func (pc *PipelineComposer) loadStepsWithMergedParams(ctx context.Context, agent
 	return steps, order, nil
 }
 
-func (pc *PipelineComposer) createPipelineTasks(steps map[string]*StepDefinition, order []string) ([]tektonv1.PipelineTask, error) {
+// merges step-specific parameters with global parameters
+// Step parameters take precedence over global parameters
+func (pc *PipelineComposer) mergeStepParameters(stepParams, globalParams []agentv1alpha1.ParameterSpec) []agentv1alpha1.ParameterSpec {
+	merged := make([]agentv1alpha1.ParameterSpec, len(globalParams))
+	copy(merged, globalParams)
 
+	// Override with step-specific params
+	for _, stepParam := range stepParams {
+		found := false
+		for i, globalParam := range merged {
+			if globalParam.Name == stepParam.Name {
+				merged[i] = stepParam
+				found = true
+				break
+			}
+		}
+		if !found {
+			merged = append(merged, stepParam)
+		}
+	}
+
+	return merged
+}
+
+func (pc *PipelineComposer) createPipelineTasks(steps map[string]*StepDefinition, order []string) ([]tektonv1.PipelineTask, error) {
 	tasks := make([]tektonv1.PipelineTask, 0, len(order))
+
 	for i, stepName := range order {
 		stepDefinition := steps[stepName]
+
+		// Convert parameters to Tekton Params (for passing to task)
+		taskParams := pc.convertToTektonParams(stepDefinition.Parameters)
+
 		// Create task with embedded spec using EmbeddedTask
 		task := tektonv1.PipelineTask{
 			Name: stepDefinition.Name,
@@ -175,8 +227,10 @@ func (pc *PipelineComposer) createPipelineTasks(steps map[string]*StepDefinition
 					Steps:      stepDefinition.TaskSpec.Steps,
 					Workspaces: stepDefinition.TaskSpec.Workspaces,
 					Volumes:    stepDefinition.TaskSpec.Volumes,
+					Results:    stepDefinition.TaskSpec.Results,
 				},
 			},
+			Params: taskParams, // ← NEW: Pass parameters to task instance
 			Workspaces: []tektonv1.WorkspacePipelineTaskBinding{
 				{
 					Name:      "source",
@@ -184,23 +238,89 @@ func (pc *PipelineComposer) createPipelineTasks(steps map[string]*StepDefinition
 				},
 			},
 		}
+
 		if i > 0 {
 			previousTaskName := order[i-1]
 			task.RunAfter = []string{previousTaskName}
 		}
+
+		if len(stepDefinition.WhenExpressions) > 0 {
+			task.When = pc.convertWhenExpressions(stepDefinition.WhenExpressions)
+		}
+
 		tasks = append(tasks, task)
 	}
 
 	return tasks, nil
 }
 
-// mergeTaskParameters merges task parameters with component parameters
+// converts ParameterSpec to Tekton Params for task invocation
+// This handles Tekton variable substitution like $(tasks.foo.results.bar)
+func (pc *PipelineComposer) convertToTektonParams(params []agentv1alpha1.ParameterSpec) tektonv1.Params {
+	tektonParams := make(tektonv1.Params, 0, len(params))
+
+	for _, param := range params {
+		// Check if value contains Tekton variable references
+		// If it does, Tekton will substitute it at runtime
+		tektonParam := tektonv1.Param{
+			Name: param.Name,
+			Value: tektonv1.ParamValue{
+				Type:      tektonv1.ParamTypeString,
+				StringVal: param.Value, // Can contain $(tasks.foo.results.bar)
+			},
+		}
+		tektonParams = append(tektonParams, tektonParam)
+
+		// Log if this is a result reference
+		if pc.isResultReference(param.Value) {
+			pc.Logger.Info("Parameter references task result",
+				"paramName", param.Name,
+				"value", param.Value)
+		}
+	}
+
+	return tektonParams
+}
+
+// checks if a parameter value references a task result
+func (pc *PipelineComposer) isResultReference(value string) bool {
+	return strings.Contains(value, "$(tasks.") && strings.Contains(value, ".results.")
+}
+
+// converts custom WhenExpression to Tekton WhenExpression
+func (pc *PipelineComposer) convertWhenExpressions(whenExprs []agentv1alpha1.WhenExpression) []tektonv1.WhenExpression {
+	tektonWhens := make([]tektonv1.WhenExpression, 0, len(whenExprs))
+
+	for _, when := range whenExprs {
+		var operator selection.Operator
+		switch when.Operator {
+		case "in":
+			operator = selection.In
+		case "notin":
+			operator = selection.NotIn
+		default:
+			pc.Logger.Info("Invalid when expression operator, defaulting to 'in'", "operator", when.Operator)
+			operator = selection.In
+		}
+		tektonWhen := tektonv1.WhenExpression{
+			Input:    when.Input,
+			Operator: operator,
+			Values:   when.Values,
+		}
+		tektonWhens = append(tektonWhens, tektonWhen)
+	}
+
+	return tektonWhens
+}
+
+// merges task parameters with component parameters
 func (pc *PipelineComposer) mergeTaskParameters(taskParams []tektonv1.ParamSpec, parameterList []agentv1alpha1.ParameterSpec) []agentv1alpha1.ParameterSpec {
 	var mergedParams []agentv1alpha1.ParameterSpec
 
 	for _, p := range parameterList {
 		pc.Logger.Info("mergeTaskParameters", "parameterList param name", p.Name, "Value", p.Value)
 	}
+
 	for _, taskParam := range taskParams {
 		defaultValue := ""
 
@@ -239,11 +359,11 @@ func (pc *PipelineComposer) mergeTaskParameters(taskParams []tektonv1.ParamSpec,
 		}
 		mergedParams = append(mergedParams, mergedParam)
 	}
+
 	return mergedParams
 }
 
 func (pc *PipelineComposer) getTaskParam(params []agentv1alpha1.ParameterSpec, paramName string) *agentv1alpha1.ParameterSpec {
-
 	for _, param := range params {
 		if param.Name == paramName {
 			return &param
@@ -251,6 +371,7 @@ func (pc *PipelineComposer) getTaskParam(params []agentv1alpha1.ParameterSpec, p
 	}
 	return nil
 }
+
 func (pc *PipelineComposer) getTaskParams(params []agentv1alpha1.ParameterSpec) []tektonv1.ParamSpec {
 	taskParams := make([]tektonv1.ParamSpec, 0, len(params))
 
@@ -263,11 +384,11 @@ func (pc *PipelineComposer) getTaskParams(params []agentv1alpha1.ParameterSpec) 
 			},
 		}
 		taskParams = append(taskParams, p)
-
 	}
 
 	return taskParams
 }
+
 func (pc *PipelineComposer) collectPipelineParams(agentBuild *agentv1alpha1.AgentBuild) []agentv1alpha1.ParameterSpec {
 	params := []agentv1alpha1.ParameterSpec{}
 

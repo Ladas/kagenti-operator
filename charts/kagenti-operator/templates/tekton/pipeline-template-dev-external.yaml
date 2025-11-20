@@ -35,11 +35,45 @@ data:
           "requiredParameters": ["subfolder-path"]
         },
         {
-          "name": "kaniko-build",
-          "configMap": "kaniko-docker-build-step-external",
+          "name": "dockerfile-check",
+          "configMap": "check-dockerfile-step",
           "enabled": true,
-          "description": "Build container image using Kaniko with registry authentication",
-          "requiredParameters": ["image"]
+          "description": "Checks if Dockerfile exists in the specified subfolder",
+          "requiredParameters": ["subfolder-path"]
+        },
+        {
+          "name": "buildah-build",
+          "configMap": "buildah-build-step",
+          "enabled": true,
+          "description": "Build container image using buildah",
+          "requiredParameters": ["image"],
+          "whenExpressions": [
+            {
+              "input": "$(tasks.dockerfile-check.results.has-dockerfile)",
+              "operator": "in",
+              "values": ["true"]
+            }
+          ],
+          "defaultParameters": [
+            {
+              "name": "DOCKERFILE",
+              "value": "$(tasks.dockerfile-check.results.dockerfile-name)"
+            }
+          ]
+        },     
+        {
+          "name": "buildpack-step",
+          "configMap": "buildpack-step",
+          "enabled": true,
+          "description": "Build container image using Buildpacks",
+          "requiredParameters": ["image"],
+          "whenExpressions": [
+            {
+              "input": "$(tasks.dockerfile-check.results.has-dockerfile)",
+              "operator": "in",
+              "values": ["false"]
+            }
+          ]
         }
       ],
       "globalParameters": [

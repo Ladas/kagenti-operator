@@ -42,7 +42,7 @@ type AgentBuildSpec struct {
 	// Mode specifies which pipeline template to use (dev, dev-local, dev-external, preprod, prod, custom)
 	// This will be used to fetch the pipeline template from ConfigMap
 	// +optional
-	// +kubebuilder:validation:Enum=dev;dev-local;dev-external;preprod;prod;custom
+	// +kubebuilder:validation:Enum=dev;buildpack-dev;dev-local;dev-external;preprod;prod;custom
 	// +kubebuilder:default=dev
 	Mode string `json:"mode,omitempty"`
 	// Metadata specifies labels and annotations to be added to the agent
@@ -92,6 +92,9 @@ type PipelineStepSpec struct {
 	// RequiredParameters lists parameter names that users must provide
 	// +optional
 	RequiredParameters []string `json:"requiredParameters,omitempty"`
+	// WhenExpressions defines conditions for step execution
+	// +optional
+	WhenExpressions []WhenExpression `json:"whenExpressions,omitempty"`
 }
 
 // PipelineTemplate represents the structure stored in ConfigMaps
@@ -131,6 +134,22 @@ type PipelineStepTemplate struct {
 	// Description explains what this step does
 	// +optional
 	Description string `json:"description,omitempty"`
+	// WhenExpressions defines conditions for step execution
+	// +optional
+	WhenExpressions []WhenExpression `json:"whenExpressions,omitempty"`
+}
+
+// WhenExpression represents a conditional execution rule which will
+// determine which build step to run (either kaniko-build or buildpack-build)
+// based on the presence of a Dockerfile in the source code repository.
+type WhenExpression struct {
+	// Input is the value to evaluate (can reference task results)
+	Input string `json:"input"`
+	// Operator is the comparison operator (in, notin)
+	// +kubebuilder:validation:Enum=in;notin
+	Operator string `json:"operator"`
+	// Values to compare against
+	Values []string `json:"values"`
 }
 
 // Parameter defines an argument

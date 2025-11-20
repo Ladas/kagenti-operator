@@ -1,0 +1,118 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: buildpack-step
+  namespace: {{ .Release.Namespace }}
+  labels:
+    kagenti.operator.dev/tekton: step 
+data:
+  task-spec.yaml: |
+    params:
+      - name: image
+        type: string
+        description: Destination image reference
+      - name: subfolder-path
+        type: string
+        description: Path to the subfolder to use as build context
+        default: "."
+      - name: registry-secret
+        type: string
+        description: Name of the secret containing registry credentials
+        default: "ghcr-token"
+      - name: BUILDER_IMAGE
+        type: string
+        description: Buildpack builder image
+        default: "heroku/builder:24"
+      - name: PYTHON_VERSION
+        type: string
+        description: Python version to use
+        default: "3.13"
+      - name: START_COMMAND  
+        type: string
+        description: Command to start the application
+        default: "python __main__.py"  # Change to your actual start command
+    steps:
+      - name: setup-build-files
+        image: busybox
+        script: |
+          #!/bin/sh
+          set -e
+          cd $(workspaces.source.path)/$(params.subfolder-path)
+          
+          # Create .python-version
+          echo "$(params.PYTHON_VERSION)" > .python-version
+          echo "Created .python-version file"
+          
+          echo "Detected START_COMMAND: $(params.START_COMMAND)"
+
+          # Default: assume command is fine
+          CMD="$(params.START_COMMAND)"
+
+          # Create .python-version file if missing
+          echo "$(params.PYTHON_VERSION)" > .python-version
+
+          # Create Procfile if it doesn't exist
+          if [ ! -f Procfile ]; then
+            printf "web: %s\ndefault: %s\n" "$CMD" "$CMD" > Procfile
+            echo "Created Procfile with command: $CMD"
+          else
+            echo "Procfile already exists"
+          fi
+          
+          # Verify files
+          echo "=== Build configuration ==="
+          echo "Python version:"
+          cat .python-version
+          echo "Procfile:"
+          cat Procfile
+          echo "==========================="
+          
+          # List all files for debugging
+          echo "Files in directory:"
+          ls -la
+          
+      - name: buildpack-build
+        image: $(params.BUILDER_IMAGE)
+        script: |
+          #!/usr/bin/env bash
+          set -e
+          
+          /cnb/lifecycle/creator \
+            -app=$(workspaces.source.path)/$(params.subfolder-path) \
+            -cache-dir=/workspace/cache \
+            -process-type=web \
+            $(params.image)
+          
+        env:
+          - name: DOCKER_CONFIG
+            value: /kaniko/.docker
+        volumeMounts:
+          - name: layers-dir
+            mountPath: /layers
+          - name: cache-dir
+            mountPath: /workspace/cache          
+          - name: docker-config
+            mountPath: /kaniko/.docker
+            readOnly: true
+        timeout: 15m
+    
+    results:
+      - name: IMAGE_URL
+        description: URL of the built image
+      - name: BUILD_STATUS
+        description: Status of the build
+    
+    volumes:
+      - name: layers-dir
+        emptyDir: {}
+      - name: cache-dir
+        emptyDir: {}
+      - name: docker-config
+        secret:
+          secretName: $(params.registry-secret)
+          items:
+          - key: .dockerconfigjson
+            path: config.json
+    
+    workspaces:
+      - name: source

@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: buildah-build-step
+  namespace: kagenti-system
+data:
+  task-spec.yaml: |
+    params:
+      - name: DOCKERFILE
+        type: string
+        description: Name of Dockerfile or Containerfile
+        default: "Dockerfile"
+      - name: image
+        type: string
+        description: Destination image reference
+      - name: SKIP_TLS_VERIFY
+        type: string
+        description: Skip TLS verification
+        default: "false"
+      - name: subfolder-path
+        type: string
+        description: Path to the subfolder
+        default: "."
+      - name: registry-secret
+        type: string
+        description: Name of the secret containing registry credentials
+        default: "ghcr-token"  
+    workspaces:
+      - name: source
+    
+    results:
+      - name: IMAGE_URL
+        description: URL of the built image
+    
+    steps:
+      - name: build-image
+        image: quay.io/buildah/stable:latest
+        script: |
+          #!/bin/bash
+          set -e
+          
+          cd $(workspaces.source.path)/$(params.subfolder-path)
+          
+          # Set up registry authentication
+          export REGISTRY_AUTH_FILE=/root/.docker/config.json
+          # Configure rootless buildah with vfs storage driver
+          export BUILDAH_ISOLATION=chroot
+          export STORAGE_DRIVER=vfs
+          
+          buildah build \
+            --file $(params.DOCKERFILE) \
+            --tag $(params.image) \
+            --tls-verify=$(params.SKIP_TLS_VERIFY) \
+            --layers \
+            .
+          
+          buildah push \
+            --tls-verify=$(params.SKIP_TLS_VERIFY) \
+            $(params.image)
+          
+          echo -n "$(params.image)" > $(results.IMAGE_URL.path)
+        securityContext:
+          runAsUser: 1000
+          runAsNonRoot: true
+          capabilities:
+            add:
+             - SETUID
+             - SETGID
+        volumeMounts:
+          - name: docker-config
+            mountPath: /root/.docker
+            readOnly: true
+    
+    volumes:
+      - name: docker-config
+        secret:
+          secretName: $(params.registry-secret)
+          items:
+          - key: .dockerconfigjson
+            path: config.json  

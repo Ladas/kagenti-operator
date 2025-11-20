@@ -85,7 +85,7 @@ func (d *AgentBuildDefaulter) Default(ctx context.Context, obj runtime.Object) e
 	return nil
 }
 
-// applyBasicDefaults sets default values for basic fields
+// sets default values for basic fields
 func (d *AgentBuildDefaulter) applyBasicDefaults(agentbuild *agentv1alpha1.AgentBuild) {
 	// Default mode
 	if agentbuild.Spec.Mode == "" {
@@ -158,7 +158,7 @@ func (d *AgentBuildDefaulter) autoGenerateParameters(agentbuild *agentv1alpha1.A
 	}
 }
 
-// shouldInjectPipelineTemplate determines if pipeline template should be injected
+// determines if pipeline template should be injected
 func (d *AgentBuildDefaulter) shouldInjectPipelineTemplate(agentbuild *agentv1alpha1.AgentBuild) bool {
 	return agentbuild.Spec.Pipeline == nil || agentbuild.Spec.Pipeline.Steps == nil || len(agentbuild.Spec.Pipeline.Steps) == 0
 }
@@ -191,7 +191,13 @@ func (d *AgentBuildDefaulter) processPipelineConfig(ctx context.Context, agentbu
 	if err != nil {
 		return fmt.Errorf("failed to get pipeline template for mode %s: %w", mode, err)
 	}
-
+	// If user provided custom steps, merge whenExpressions from template
+	if len(buildSpec.Pipeline.Steps) > 0 {
+		agentbuildlog.Info("Mutating webhook - merging whenExpressions from template into user-defined steps")
+		d.mergeWhenExpressionsIntoUserSteps(template, buildSpec.Pipeline)
+		return nil
+	}
+	agentbuildlog.Info("Mutating webhook - using template steps")
 	// Validate required parameters
 	err = d.validateRequiredParameters(template, buildSpec.Pipeline)
 	if err != nil {
@@ -211,7 +217,50 @@ func (d *AgentBuildDefaulter) processPipelineConfig(ctx context.Context, agentbu
 	return nil
 }
 
-// getPipelineTemplate retrieves pipeline template from ConfigMap
+// merges whenExpressions from template into user-provided steps
+func (d *AgentBuildDefaulter) mergeWhenExpressionsIntoUserSteps(template *agentv1alpha1.PipelineTemplate, pipelineSpec *agentv1alpha1.PipelineSpec) {
+	// Create map of template steps for easy lookup
+	templateStepsMap := make(map[string]agentv1alpha1.PipelineStepTemplate)
+	for _, templateStep := range template.Steps {
+		templateStepsMap[templateStep.Name] = templateStep
+	}
+
+	// Merge whenExpressions from template into user's steps
+	for i := range pipelineSpec.Steps {
+		step := &pipelineSpec.Steps[i]
+
+		if templateStep, exists := templateStepsMap[step.Name]; exists {
+			// Copy whenExpressions from template if not specified by user
+			if len(step.WhenExpressions) == 0 && len(templateStep.WhenExpressions) > 0 {
+				step.WhenExpressions = templateStep.WhenExpressions
+				agentbuildlog.Info("Merged whenExpressions from template",
+					"stepName", step.Name,
+					"count", len(step.WhenExpressions))
+			}
+			// Merge defaultParameters from template if not specified by user
+			if len(step.Parameters) == 0 && len(templateStep.DefaultParameters) > 0 {
+				step.Parameters = templateStep.DefaultParameters
+				agentbuildlog.Info("Merged defaultParameters from template",
+					"stepName", step.Name,
+					"count", len(step.Parameters))
+
+				// Log each parameter being merged
+				for _, param := range step.Parameters {
+					agentbuildlog.Info("Merged parameter",
+						"stepName", step.Name,
+						"paramName", param.Name,
+						"paramValue", param.Value)
+				}
+			}
+			// Also merge enabled flag if not specified
+			if step.Enabled == nil && templateStep.Enabled != nil {
+				step.Enabled = templateStep.Enabled
+			}
+		}
+	}
+}
+
+// retrieves pipeline template from ConfigMap
 func (d *AgentBuildDefaulter) getPipelineTemplate(ctx context.Context, mode, namespace string) (*agentv1alpha1.PipelineTemplate, error) {
 	configMapName := fmt.Sprintf("%s-%s", PipelineTemplateConfigMapPrefix, mode)
 	agentbuildlog.Info("Mutating webhook - using Tekton pipeline from configMap", "configMap Name", configMapName, "namespace", namespace)
@@ -271,7 +320,7 @@ func (d *AgentBuildDefaulter) validateRequiredParameters(template *agentv1alpha1
 	return nil
 }
 
-// mergePipelineTemplate merges template with user parameters to create final pipeline
+// merges template with user parameters to create final pipeline
 func (d *AgentBuildDefaulter) mergePipelineTemplate(template *agentv1alpha1.PipelineTemplate, pipelineSpec *agentv1alpha1.PipelineSpec) (*agentv1alpha1.PipelineSpec, error) {
 	agentbuildlog.Info("Mutating webhook - mergePipelineTemplate()")
 	// Create parameter map from user input
@@ -291,10 +340,18 @@ func (d *AgentBuildDefaulter) mergePipelineTemplate(template *agentv1alpha1.Pipe
 
 		// Create final step
 		pipelineStep := agentv1alpha1.PipelineStepSpec{
-			Name:      stepTemplate.Name,
-			ConfigMap: stepTemplate.ConfigMap,
-			Enabled:   stepTemplate.Enabled,
+			Name:            stepTemplate.Name,
+			ConfigMap:       stepTemplate.ConfigMap,
+			Enabled:         stepTemplate.Enabled,
+			WhenExpressions: stepTemplate.WhenExpressions,
+			Parameters:      stepTemplate.DefaultParameters,
 		}
+		agentbuildlog.Info("Adding pipeline step from template",
+			"stepName", stepTemplate.Name,
+			"configMap", stepTemplate.ConfigMap,
+			"whenExpressionsCount", len(stepTemplate.WhenExpressions),
+			"defaultParametersCount", len(stepTemplate.DefaultParameters))
+
 		pipelineSteps = append(pipelineSteps, pipelineStep)
 	}
 
@@ -316,7 +373,7 @@ func (d *AgentBuildDefaulter) mergePipelineTemplate(template *agentv1alpha1.Pipe
 	return pipeline, nil
 }
 
-// resolveTemplateValue resolves template variables in parameter values
+// resolves template variables in parameter values
 func (d *AgentBuildDefaulter) resolveTemplateValue(value string, vars map[string]string) string {
 	resolved := value
 

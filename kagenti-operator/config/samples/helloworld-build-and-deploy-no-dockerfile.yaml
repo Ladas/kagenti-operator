@@ -1,14 +1,14 @@
 apiVersion: agent.kagenti.dev/v1alpha1
 kind: AgentBuild
 metadata:
-  name: weather-agent-build
+  name: helloworld-agent-build
   namespace: kagenti
 spec:
   mode: dev
   source:
-    sourceRepository: "github.com/kagenti/agent-examples.git"
+    sourceRepository: "github.com/a2aproject/a2a-samples.git"
     sourceRevision: "main"
-    sourceSubfolder: "a2a/weather_service"
+    sourceSubfolder: "samples/python/agents/helloworld"
     sourceCredentials:
       name: github-token-secret
 
@@ -17,9 +17,12 @@ spec:
     parameters:
     - name: SOURCE_REPO_SECRET
       value: github-token-secret
-
+    - name: START_COMMAND          # Custom start command
+      value: "python __main__.py"
+    - name: PYTHON_VERSION         # Specify Python version
+      value: "3.13"
   buildOutput:
-    image: "weather-service"
+    image: "helloworld-service"
     imageTag: "v0.0.1"
     imageRegistry: "registry.cr-system.svc.cluster.local:5000"
     imageRepoCredentials:
@@ -29,22 +32,22 @@ spec:
 apiVersion: agent.kagenti.dev/v1alpha1
 kind: Agent
 metadata:
-  name: weather-agent
+  name: helloworld-agent
   namespace: kagenti
   labels:
-    app: weather-service
+    app: helloworld-service
 
   annotations:
-    description: "Weather data processing agent"
+    description: "helloworld agent"
 spec:
-  description: "Agent that processes weather data"
+  description: "Agent saying Hello"
 
   replicas: 1
 
   # Use existing container image
   imageSource:
     buildRef:
-      name: weather-agent-build
+      name: helloworld-agent-build
 
   # Complete pod template specification
   podTemplateSpec:

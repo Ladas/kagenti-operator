@@ -1,0 +1,61 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: check-dockerfile-step
+  namespace: {{ .Release.Namespace }}
+  labels:
+    kagenti.operator.dev/tekton: step 
+data:
+  
+  task-spec.yaml: |
+    params:
+      - name: subfolder-path
+        type: string
+        description: Path to the subfolder to verify
+        default: "" 
+    workspaces:
+      - name: source
+    results:
+      - name: has-dockerfile
+        description: Whether Dockerfile or Containerfile exists (true/false)
+      - name: dockerfile-name
+        description: The actual filename found (Dockerfile, Containerfile, or empty)
+    steps:
+      - name: check
+        image: alpine:latest
+        script: |
+          #!/bin/sh
+          set -e
+
+          WORKSPACE=$(workspaces.source.path)
+          SUBFOLDER=$(params.subfolder-path)
+          
+          # Construct the full path
+          if [ -n "$SUBFOLDER" ]; then
+            CHECK_PATH="$WORKSPACE/$SUBFOLDER"
+          else
+            CHECK_PATH="$WORKSPACE"
+          fi
+          
+          echo "Checking for Dockerfile or Containerfile in: $CHECK_PATH"
+          ls -la "$CHECK_PATH" || true
+          
+          # Check for Dockerfile first (preferred)
+          if [ -f "$CHECK_PATH/Dockerfile" ]; then
+            echo "Dockerfile found"
+            printf "true" > $(results.has-dockerfile.path)
+            printf "Dockerfile" > $(results.dockerfile-name.path)
+          # Check for Containerfile as fallback
+          elif [ -f "$CHECK_PATH/Containerfile" ]; then
+            echo "Containerfile found"
+            printf "true" > $(results.has-dockerfile.path)
+            printf "Containerfile" > $(results.dockerfile-name.path)
+          else
+            echo "No Dockerfile or Containerfile found"
+            printf "false" > $(results.has-dockerfile.path)
+            printf "" > $(results.dockerfile-name.path)
+          fi
+          
+          # Verify results
+          echo "Result has-dockerfile: $(cat $(results.has-dockerfile.path))"
+          echo "Result dockerfile-name: $(cat $(results.dockerfile-name.path))"

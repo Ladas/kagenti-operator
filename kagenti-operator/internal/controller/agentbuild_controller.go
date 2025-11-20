@@ -221,6 +221,7 @@ func (r *AgentBuildReconciler) triggerBuild(agentBuild *agentv1alpha1.AgentBuild
 	return false, nil
 }
 func (r *AgentBuildReconciler) handleDeletion(ctx context.Context, agentBuild *agentv1alpha1.AgentBuild) (ctrl.Result, error) {
+	agentBuildlogger.Info("Controller --------", "handleDeletion", "Deleting AgentBuild")
 	if controllerutil.ContainsFinalizer(agentBuild, AGENT_FINALIZER) {
 		// Cleanup PipelineRun if exists
 		if agentBuild.Status.PipelineRunName != "" {

@@ -304,16 +304,6 @@ func (d *KubernetesDeployer) createDeployment(ctx context.Context, component *pl
 		},
 		Spec: corev1.PodSpec{
 			ServiceAccountName: component.Name,
-			InitContainers: []corev1.Container{
-				{
-					Name:    "fix-permissions",
-					Image:   "busybox:1.36",
-					Command: []string{"sh", "-c", "chmod 0755 /opt"},
-					VolumeMounts: []corev1.VolumeMount{
-						SVIDMount,
-					},
-				},
-			},
 			Containers: []corev1.Container{
 				{
 					Name:            component.Name,
