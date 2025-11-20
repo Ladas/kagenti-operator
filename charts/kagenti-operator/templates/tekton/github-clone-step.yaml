@@ -10,27 +10,59 @@ data:
     params:
       - name: GITHUB_TOKEN
         type: string
-        description: The Git repository URL with the token
-        default: ""  # Token will be injected from component or externally
+        description: GitHub token for private repos (optional for public repos)
+        default: ""  # Token is optional for public repositories
       - name: repo-url
         type: string
-        description: The Git repository URL without the token
+        description: The Git repository URL without the token (e.g., github.com/org/repo.git)
       - name: revision
         type: string
         description: The Git revision to checkout
         default: "main"
     steps:
       - name: git-clone
-        image: ghcr.io/tektoncd/github.com/tektoncd/pipeline/cmd/git-init:latest
-        command:
-          - /ko-app/git-init
-        args:
-          - -url
-          - https://$(params.repo-url)
-          - -revision
-          - $(params.revision)
-          - -path
-          - /workspace/source
+        image: public.ecr.aws/docker/library/alpine/git:latest
+        workingDir: /workspace
+        script: |
+          #!/bin/sh
+          set -eu
+
+          REPO_URL="$(params.repo-url)"
+          REVISION="$(params.revision)"
+          GITHUB_TOKEN="$(params.GITHUB_TOKEN)"
+
+          # Add https:// prefix if not present
+          if ! echo "$REPO_URL" | grep -q "^https://"; then
+            REPO_URL="https://$REPO_URL"
+          fi
+
+          # If GITHUB_TOKEN is provided, inject it into URL for authenticated clone
+          if [ -n "$GITHUB_TOKEN" ]; then
+            echo "Cloning with authentication..."
+            # Extract domain and path from URL
+            REPO_DOMAIN=$(echo "$REPO_URL" | sed -e 's|https://||' -e 's|/.*||')
+            REPO_PATH=$(echo "$REPO_URL" | sed -e "s|https://$REPO_DOMAIN/||")
+            CLONE_URL="https://$GITHUB_TOKEN@$REPO_DOMAIN/$REPO_PATH"
+          else
+            echo "Cloning public repository (no authentication)..."
+            CLONE_URL="$REPO_URL"
+          fi
+
+          # Clone the repository
+          echo "Cloning $REPO_URL at revision $REVISION..."
+          git clone --depth 1 --branch "$REVISION" "$CLONE_URL" /workspace/source || \
+            git clone "$CLONE_URL" /workspace/source
+
+          # If branch clone failed, try checking out the revision
+          cd /workspace/source
+          if [ "$(git rev-parse --abbrev-ref HEAD)" != "$REVISION" ]; then
+            git fetch origin "$REVISION"
+            git checkout "$REVISION"
+          fi
+
+          echo "✓ Successfully cloned repository"
+          echo "Repository contents:"
+          ls -la /workspace/source
       - name: list-dir
         image: public.ecr.aws/docker/library/alpine:latest
         workingDir: $(workspaces.source.path) 
