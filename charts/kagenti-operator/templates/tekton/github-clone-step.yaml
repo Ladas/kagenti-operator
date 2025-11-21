@@ -33,6 +33,7 @@ data:
 
           # Disable git credential prompts for non-interactive environments
           export GIT_TERMINAL_PROMPT=0
+          export GIT_ASKPASS=true  # Use /bin/true as credential program (no credentials)
           git config --global credential.helper ""
 
           # Add https:// prefix if not present
