@@ -21,7 +21,7 @@ data:
         default: "main"
     steps:
       - name: git-clone
-        image: public.ecr.aws/docker/library/alpine/git:latest
+        image: alpine/git:latest
         workingDir: /workspace
         script: |
           #!/bin/sh
