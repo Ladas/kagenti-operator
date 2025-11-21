@@ -31,6 +31,10 @@ data:
           REVISION="$(params.revision)"
           GITHUB_TOKEN="$(params.GITHUB_TOKEN)"
 
+          # Disable git credential prompts for non-interactive environments
+          export GIT_TERMINAL_PROMPT=0
+          git config --global credential.helper ""
+
           # Add https:// prefix if not present
           if ! echo "$REPO_URL" | grep -q "^https://"; then
             REPO_URL="https://$REPO_URL"
