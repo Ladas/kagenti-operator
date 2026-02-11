@@ -270,6 +270,14 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "AgentCardSync")
 		os.Exit(1)
 	}
+	if err = (&controller.KagentiNamespaceReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("kagentinamespace-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "KagentiNamespace")
+		os.Exit(1)
+	}
 	if err = webhookv1alpha1.SetupAgentBuildWebhookWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "AgentBuild")
 		os.Exit(1)
